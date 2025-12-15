@@ -9,72 +9,149 @@ import sys
 
 results = []
 
-# ==================== BỔ SUNG RATIONALE CHO CÁC TIÊU CHÍ MỚI ====================
+# ==================== DICTIONARY CHỨA RATIONALE ====================
 RATIONALE_DICT = {
-    # ... (giữ nguyên các rationale cũ) ...
+    # 1.2 Package Management
+    "1.2.1.1": "It is important to ensure that updates are obtained from a valid source to protect against spoofing that could lead to the inadvertent installation of malware on the system.",
+    "1.2.1.2": "If a system's package repositories are misconfigured important patches may not be identified or a rogue repository could introduce compromised software.",
+    "1.2.2.1": "Newer patches may contain security enhancements that would not be available through the latest full update. As a result, it is recommended that the latest software patches be used to take advantage of the latest functionality.",
     
-    # 5.3.2.3 PAM pwquality
+    # 1.3 AppArmor
+    "1.3.1.1": "Without a Mandatory Access Control system installed only the default Discretionary Access Control system will be available.",
+    "1.3.1.2": "AppArmor is a security mechanism and disabling it is not recommended.",
+    "1.3.1.3": "Security configuration requirements vary from site to site. Some sites may mandate a policy that is stricter than the default policy, which is perfectly acceptable. This item is intended to ensure that any policies that exist on the system are activated.",
+    "1.3.1.4": "Security configuration requirements vary from site to site. Some sites may mandate a policy that is stricter than the default policy, which is perfectly acceptable. This item is intended to ensure that any policies that exist on the system are activated.",
+    
+    # 1.6 Message of the Day
+    "1.6.4": "If the /etc/motd file does not have the correct access configured, it could be modified by unauthorized users with incorrect or misleading information.",
+    "1.6.5": "If the /etc/issue file does not have the correct access configured, it could be modified by unauthorized users with incorrect or misleading information.",
+    "1.6.6": "If the /etc/issue.net file does not have the correct access configured, it could be modified by unauthorized users with incorrect or misleading information.",
+    
+    # 2.4 Cron
+    "2.4.1.2": "This file contains information on what system jobs are run by cron. Write access to these files could provide unprivileged users with the ability to elevate their privileges. Read access could provide insight on system jobs.",
+    "2.4.1.3": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.4": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.5": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.6": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.7": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.8": "Granting write access to this directory for non-privileged users could provide them the means for gaining unauthorized elevated privileges. Granting read access could give an unprivileged user insight in how to gain elevated privileges.",
+    "2.4.1.9": "On many systems, only the system administrator is authorized to schedule cron jobs. Using the cron.allow file to control who can run cron jobs enforces this policy.",
+    "2.4.2.1": "On many systems, only the system administrator is authorized to schedule at jobs. Using the at.allow file to control who can run at jobs enforces this policy.",
+    
+    # 5.1 SSH
+    "5.1.1": "Configuration specifications for sshd need to be protected from unauthorized changes by non-privileged users.",
+    "5.1.2": "If an unauthorized user obtains the private SSH host key file, the host could be impersonated.",
+    "5.1.3": "If a public host key file is modified by an unauthorized user, the SSH service may be compromised.",
+    "5.2.10": "Even though the primary function of root is to have privileges to modify any aspect of a Unix type system, if root is permitted to log in via SSH, an attacker could attempt a brute force attack against the root password.",
+    
+    # 5.3 PAM
+    "5.3.1.3": "Strong passwords reduce the risk of systems being hacked through brute force methods. Older versions of the libpam-pwquality package may not include the latest security patches.",
+    "5.3.2.1": "The system should only provide access after performing authentication of a user.",
+    "5.3.2.2": "Locking out user IDs after n unsuccessful consecutive login attempts mitigates brute force password attacks against your systems.",
+    
+    # 5.3.2.3 PAM pwquality (mới bổ sung)
     "5.3.2.3": "Use of a unique, complex passwords helps to increase the time and resources required to compromise the password.",
     
-    # 5.3.2.4 PAM pwhistory  
+    # 5.3.2.4 PAM pwhistory (mới bổ sung)  
     "5.3.2.4": "Use of a unique, complex passwords helps to increase the time and resources required to compromise the password.",
     
-    # 5.3.3.1.1 Password failed attempts lockout
+    # 5.3.3.1.1 Password failed attempts lockout (mới bổ sung)
     "5.3.3.1.1": "Locking out user IDs after n unsuccessful consecutive login attempts mitigates brute force password attacks against your systems.",
     
-    # 5.3.3.1.2 Password unlock time
+    # 5.3.3.1.2 Password unlock time (mới bổ sung)
     "5.3.3.1.2": "Locking out user IDs after n unsuccessful consecutive login attempts mitigates brute force password attacks against your systems.",
     
-    # 5.3.3.3.1 Password history remember
+    "5.3.3.1.3": "Locking out user IDs after n unsuccessful consecutive login attempts mitigates brute force password attacks against your systems.",
+    "5.3.3.2.2": "Strong passwords help protect systems from password attacks. Types of password attacks include dictionary attacks and brute force attacks.",
+    
+    # 5.3.3.3.1 Password history remember (mới bổ sung)
     "5.3.3.3.1": "Requiring users not to reuse their passwords make it less likely that an attacker will be able to guess the password or use a compromised password.",
     
-    # 5.3.3.4.1 PAM unix nullok
+    # 5.3.3.4.1 PAM unix nullok (mới bổ sung)
     "5.3.3.4.1": "Using a strong password is essential to helping protect personal and sensitive information from unauthorized access",
     
-    # 5.4.1.2 Minimum password days
+    # 5.4 User Accounts
+    "5.4.1.1": "The window of opportunity for an attacker to leverage compromised credentials or successfully compromise credentials via an online brute force attack is limited by the age of the password.",
+    
+    # 5.4.1.2 Minimum password days (mới bổ sung)
     "5.4.1.2": "Users may have favorite passwords that they like to use because they are easy to remember. By restricting the frequency of password changes, an administrator can prevent users from repeatedly changing their password in an attempt to circumvent password reuse controls.",
     
-    # 5.4.1.3 Password expiration warning days
+    # 5.4.1.3 Password expiration warning days (mới bổ sung)
     "5.4.1.3": "Providing an advance warning that a password will be expiring gives users time to think of a secure password. Users caught unaware may choose a simple password or write it down where it may be discovered.",
     
-    # 5.4.2.2 Root GID 0
+    "5.4.1.4": "The SHA-512 and yescrypt algorithms provide a stronger hash than other algorithms used by Linux for password hash generation.",
+    "5.4.1.5": "Inactive accounts pose a threat to system security since the users are not logging in to notice failed login attempts or other anomalies.",
+    "5.4.2.1": "Any account with UID 0 has superuser privileges on the system. This access must be limited to only the default root account.",
+    
+    # 5.4.2.2 Root GID 0 (mới bổ sung)
     "5.4.2.2": "Using GID 0 for the root account helps prevent root-owned files from accidentally becoming accessible to non-privileged users.",
     
-    # 5.4.2.3 Group root GID 0
+    # 5.4.2.3 Group root GID 0 (mới bổ sung)
     "5.4.2.3": "Using GID 0 for the root group helps prevent root group owned files from accidentally becoming accessible to non-privileged users.",
     
-    # 5.4.2.8 Accounts without valid shell locked
+    "5.4.2.4": "Access to root should be secured at all times.",
+    "5.4.2.7": "It is important to make sure that accounts that are not being used by regular users are prevented from being used to provide an interactive shell.",
+    
+    # 5.4.2.8 Accounts without valid shell locked (mới bổ sung)
     "5.4.2.8": "It is important to make sure that accounts that are not being used by regular users are prevented from being used to provide an interactive shell.",
     
-    # 6.2.4.2 Audit log files owner
+    # 6.1 Logging
+    "6.1.1.2": "It is important to ensure that log files have the correct permissions to ensure that sensitive data is archived and protected.",
+    "6.1.2.4": "It is important to ensure that log files have the correct permissions to ensure that sensitive data is archived and protected.",
+    "6.1.3.1": "It is important that log files have the correct permissions to ensure that sensitive data is protected and that only the appropriate users/groups have access to them.",
+    
+    # 6.2 Audit
+    "6.2.4.1": "It is important that log files have the correct permissions to ensure that sensitive data is protected and that only the appropriate users/groups have access to them.",
+    
+    # 6.2.4.2 Audit log files owner (mới bổ sung)
     "6.2.4.2": "Access to audit records can reveal system and configuration data to attackers, potentially compromising its confidentiality.",
     
-    # 6.2.4.3 Audit log files group owner
+    # 6.2.4.3 Audit log files group owner (mới bổ sung)
     "6.2.4.3": "Access to audit records can reveal system and configuration data to attackers, potentially compromising its confidentiality.",
     
-    # 6.2.4.4 Audit log directory mode
+    # 6.2.4.4 Audit log directory mode (mới bổ sung)
     "6.2.4.4": "Audit information includes all information including: audit records, audit settings and audit reports. This information is needed to successfully audit system activity.",
     
-    # 6.2.4.5 Audit configuration files mode
+    # 6.2.4.5 Audit configuration files mode (mới bổ sung)
     "6.2.4.5": "Access to the audit configuration files could allow unauthorized personnel to prevent the auditing of critical events.",
     
-    # 6.2.4.6 Audit configuration files owner
+    # 6.2.4.6 Audit configuration files owner (mới bổ sung)
     "6.2.4.6": "Access to the audit configuration files could allow unauthorized personnel to prevent the auditing of critical events.",
     
-    # 6.2.4.7 Audit configuration files group owner
+    # 6.2.4.7 Audit configuration files group owner (mới bổ sung)
     "6.2.4.7": "Access to the audit configuration files could allow unauthorized personnel to prevent the auditing of critical events.",
     
-    # 6.2.4.8 Audit tools mode
+    # 6.2.4.8 Audit tools mode (mới bổ sung)
     "6.2.4.8": "Protecting audit information includes identifying and protecting the tools used to view and manipulate log data.",
     
-    # 6.2.4.9 Audit tools owner
+    # 6.2.4.9 Audit tools owner (mới bổ sung)
     "6.2.4.9": "Protecting audit information includes identifying and protecting the tools used to view and manipulate log data.",
     
-    # 6.2.4.10 Audit tools group owner
+    # 6.2.4.10 Audit tools group owner (mới bổ sung)
     "6.2.4.10": "Protecting audit information includes identifying and protecting the tools used to view and manipulate log data.",
     
-    # 7.1.10 /etc/security/opasswd
+    # 7.1 File Permissions
+    "7.1.1": "It is critical to ensure that the /etc/passwd file is protected from unauthorized write access.",
+    "7.1.2": "It is critical to ensure that the /etc/passwd- file is protected from unauthorized access.",
+    "7.1.3": "The /etc/group file needs to be protected from unauthorized changes by non-privileged users.",
+    "7.1.4": "It is critical to ensure that the /etc/group- file is protected from unauthorized access.",
+    "7.1.5": "If attackers can gain read access to the /etc/shadow file, they can easily run a password cracking program against the hashed password to break it.",
+    "7.1.6": "If attackers can gain read access to the /etc/shadow- file, they can easily run a password cracking program against the hashed password to break it.",
+    "7.1.7": "If attackers can gain read access to the /etc/gshadow file, they can easily run a password cracking program against the hashed password to break it.",
+    "7.1.8": "If attackers can gain read access to the /etc/gshadow- file, they can easily run a password cracking program against the hashed password to break it.",
+    "7.1.9": "It is critical to ensure that the /etc/shells file is protected from unauthorized access.",
+    
+    # 7.1.10 /etc/security/opasswd (mới bổ sung)
     "7.1.10": "It is critical to ensure that /etc/security/opasswd is protected from unauthorized access.",
+    
+    "7.1.11": "Data in world-writable files can be modified and compromised by any user on the system. World writable files may also indicate an incorrectly written script or program.",
+    "7.1.12": "A new user or group who is assigned a deleted user's user ID or group ID may then end up 'owning' a deleted user or group's files, and thus have more access on the system than was intended.",
+    "7.1.13": "There are valid reasons for SUID and SGID programs, but it is important to identify and review such programs to ensure they are legitimate.",
+    "7.2.9": "Since the user is accountable for files stored in the user home directory, the user must be the owner of the directory. Group or world-writable user home directories may enable malicious users to steal or modify other users' data.",
+    
+    # Additional checks
+    "4.5.1": "A firewall is essential for controlling the incoming and outgoing network traffic based on predetermined security rules.",
+    "3.1.1": "IP forwarding permits the kernel to forward packets from one network interface to another. This should only be enabled if the system is intended to function as a router.",
 }
 
 # ==================== CÁC HÀM TIỆN ÍCH ====================
@@ -159,7 +236,13 @@ def check_file_permission(filepath, expected_mode, expected_owner="root", expect
     except:
         return "ERROR", f"Error checking {filepath}"
 
-# ==================== CÁC HÀM KIỂM TRA CƠ BẢN BỊ THIẾU ====================
+def check_cron_dir_perms(directory, expected_mode="700"):
+    """Hàm phụ: Kiểm tra quyền các thư mục cron."""
+    if not os.path.exists(directory):
+        return "PASS", f"Directory {directory} does not exist (cron may not be installed)"
+    return check_file_permission(directory, expected_mode)
+
+# ==================== CÁC HÀM KIỂM TRA CƠ BẢN ====================
 
 def check_gpg_keys():
     """1.2.1.1: Kiểm tra xem GPG keys cho apt có được cấu hình đúng không."""
@@ -250,15 +333,13 @@ def check_cron_monthly():
     """2.4.1.6: Kiểm tra quyền thư mục cron.monthly."""
     return check_cron_dir_perms("/etc/cron.monthly")
 
+def check_cron_yearly():
+    """2.4.1.7: Kiểm tra quyền thư mục cron.yearly."""
+    return check_cron_dir_perms("/etc/cron.yearly")
+
 def check_cron_d():
     """2.4.1.8: Kiểm tra quyền thư mục cron.d."""
     return check_cron_dir_perms("/etc/cron.d")
-
-def check_cron_dir_perms(directory, expected_mode="700"):
-    """Hàm phụ: Kiểm tra quyền các thư mục cron."""
-    if not os.path.exists(directory):
-        return "PASS", f"Directory {directory} does not exist (cron may not be installed)"
-    return check_file_permission(directory, expected_mode)
 
 def check_cron_allow():
     """2.4.1.9: Kiểm tra file cho phép/cấm dùng cron."""
@@ -923,6 +1004,7 @@ if __name__ == "__main__":
         ("2.4.1.4", "/etc/cron.daily Permissions", "Ensure access to /etc/cron.daily is configured", "Medium", check_cron_daily, "chmod 700 /etc/cron.daily && chown root:root /etc/cron.daily"),
         ("2.4.1.5", "/etc/cron.weekly Permissions", "Ensure access to /etc/cron.weekly is configured", "Medium", check_cron_weekly, "chmod 700 /etc/cron.weekly && chown root:root /etc/cron.weekly"),
         ("2.4.1.6", "/etc/cron.monthly Permissions", "Ensure access to /etc/cron.monthly is configured", "Medium", check_cron_monthly, "chmod 700 /etc/cron.monthly && chown root:root /etc/cron.monthly"),
+        ("2.4.1.7", "/etc/cron.yearly Permissions", "Ensure access to /etc/cron.yearly is configured", "Medium", check_cron_yearly, "chmod 700 /etc/cron.yearly && chown root:root /etc/cron.yearly"),
         ("2.4.1.8", "/etc/cron.d Permissions", "Ensure access to /etc/cron.d is configured", "Medium", check_cron_d, "chmod 700 /etc/cron.d && chown root:root /etc/cron.d"),
         ("2.4.1.9", "cron.allow/cron.deny", "Ensure access to crontab is configured", "Medium", check_cron_allow, "chmod 640 /etc/cron.allow /etc/cron.deny"),
         ("2.4.2.1", "at/cron Restricted", "Ensure access to at is configured", "Medium", check_at_cron_restricted, "chmod 640 /etc/at.allow /etc/at.deny"),
