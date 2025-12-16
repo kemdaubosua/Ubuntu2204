@@ -6,6 +6,8 @@ import tempfile
 from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
 import sys
+import time
+import math
 
 results = []
 
@@ -14,7 +16,7 @@ RATIONALE_DICT = {
     # 1.2 Package Management
     "1.2.1.1": "It is important to ensure that updates are obtained from a valid source to protect against spoofing...",
     "1.2.1.2": "If a system's package repositories are misconfigured important patches may not be identified...",
-    "1.2.2.1": "Newer patches may contain security enhancements that would not be available through the latest full update...",
+    "1.2.2.1": "Use the latest software patches to benefit from security enhancements and new features, while ensuring compatibility and supportability of additional software.",
     
     # 1.3 AppArmor
     "1.3.1.1": "Without a Mandatory Access Control system installed only the default Discretionary Access Control...",
@@ -42,7 +44,6 @@ RATIONALE_DICT = {
     "5.1.1": "Configuration specifications for sshd need to be protected from unauthorized changes...",
     "5.1.2": "If an unauthorized user obtains the private SSH host key file, the host could be impersonated.",
     "5.1.3": "If a public host key file is modified by an unauthorized user, the SSH service may be compromised.",
-    "5.2.10": "Even though the primary function of root is to have privileges to modify any aspect of a Unix type system...",
     
     # 5.3 PAM
     "5.3.1.3": "Strong passwords reduce the risk of systems being hacked through brute force methods...",
@@ -104,8 +105,7 @@ RATIONALE_DICT = {
     "7.2.9": "Since the user is accountable for files stored in the user home directory...",
     
     # Additional checks
-    "4.5.1": "A firewall is essential for controlling the incoming and outgoing network traffic...",
-    "3.1.1": "IP forwarding permits the kernel to forward packets from one network interface to another...",
+    "4.1.1": "A firewall is essential for controlling the incoming and outgoing network traffic based on predetermined security rules. Without a configured firewall, the system is vulnerable to unauthorized access and network attacks.",
 }
 
 # ==================== UTILITY FUNCTIONS ====================
@@ -144,6 +144,8 @@ def audit_check(cis_id, title, description, severity, check_func, fix_cmd):
         print(f"\033[92m[PASS]\033[0m")
     elif status == "MANUAL":
         print(f"\033[93m[MANUAL]\033[0m")
+    elif status == "SKIP":
+        print(f"\033[94m[SKIP]\033[0m")
     else:
         print(f"\033[93m[{status}]\033[0m")
     
@@ -325,20 +327,6 @@ def check_ssh_public_keys():
         return "FAIL", "\n".join(issues[:5])
     return "PASS", "SSH public key permissions are correct"
 
-def check_ssh_root_login():
-    content = get_file_content("/etc/ssh/sshd_config")
-    if not content:
-        return "FAIL", "File /etc/ssh/sshd_config not found"
-    
-    match = re.search(r"^PermitRootLogin\s+(yes|prohibit-password|without-password)", content, re.MULTILINE | re.IGNORECASE)
-    if match:
-        return "FAIL", f"Insecure config: {match.group(0).strip()}"
-    
-    if re.search(r"^PermitRootLogin\s+no", content, re.MULTILINE | re.IGNORECASE):
-        return "PASS", "PermitRootLogin is set to 'no'"
-    
-    return "MANUAL", "PermitRootLogin not explicitly set (check default)"
-
 # --- Section 5.3 PAM ---
 def check_pam_pwquality():
     out = run_cmd("dpkg-query -s libpam-pwquality 2>/dev/null | grep Status")
@@ -371,26 +359,74 @@ def check_pam_pwhistory_enabled():
     return "FAIL", "pam_pwhistory module is not enabled in /etc/pam.d/common-password"
 
 def check_password_lockout_configured():
-    out = run_cmd("grep -Pi -- '^\\h*deny\\h*=\\h*[0-5]\\b' /etc/security/faillock.conf")
-    if out and "deny = 5" in out or "deny = 3" in out:
-        return "PASS", f"Password lockout configured: {out.strip()}"
+    """CIS 5.3.3.1.1: Ensure password failed attempts lockout is configured (deny=1-5)"""
+    deny_value = None
     
-    pam_out = run_cmd("grep -Pi -- 'pam_faillock\\.so.*deny=' /etc/pam.d/common-auth")
-    if pam_out:
-        return "MANUAL", f"Password lockout configured in PAM: {pam_out[:100]}"
+    # Kiểm tra trong /etc/security/faillock.conf
+    if os.path.exists("/etc/security/faillock.conf"):
+        with open("/etc/security/faillock.conf", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('deny'):
+                    try:
+                        parts = line.split('=')
+                        if len(parts) > 1:
+                            deny_value = int(parts[1].strip())
+                            break
+                    except (ValueError, IndexError):
+                        continue
     
-    return "FAIL", "Password failed attempts lockout not properly configured"
+    # Nếu không tìm thấy, thử tìm trong PAM
+    if deny_value is None:
+        out = run_cmd("grep -P -- 'pam_faillock\\.so.*deny=' /etc/pam.d/common-auth")
+        if out:
+            match = re.search(r'deny\s*=\s*(\d+)', out)
+            if match:
+                deny_value = int(match.group(1))
+    
+    if deny_value is not None:
+        if 1 <= deny_value <= 5:
+            return "PASS", f"Password lockout configured with deny={deny_value}"
+        else:
+            return "FAIL", f"Password lockout deny value is {deny_value}, should be between 1 and 5"
+    else:
+        return "FAIL", "Password failed attempts lockout not properly configured (deny not set)"
 
 def check_password_unlock_time():
-    out = run_cmd("grep -Pi -- '^\\h*unlock_time\\h*=' /etc/security/faillock.conf")
-    if out:
-        match = re.search(r'unlock_time\s*=\s*(\d+)', out)
-        if match:
-            time = int(match.group(1))
-            if time == 0 or time >= 900:
-                return "PASS", f"Password unlock time configured: {out.strip()}"
+    """CIS 5.3.3.1.2: Ensure password unlock time is configured (0 or >=900)"""
+    unlock_value = None
     
-    return "MANUAL", "Check /etc/security/faillock.conf for unlock_time setting"
+    # Kiểm tra trong /etc/security/faillock.conf
+    if os.path.exists("/etc/security/faillock.conf"):
+        with open("/etc/security/faillock.conf", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('unlock_time'):
+                    try:
+                        parts = line.split('=')
+                        if len(parts) > 1:
+                            unlock_value = int(parts[1].strip())
+                            break
+                    except (ValueError, IndexError):
+                        continue
+    
+    # Nếu không tìm thấy, thử tìm trong PAM
+    if unlock_value is None:
+        out = run_cmd("grep -P -- 'pam_faillock\\.so.*unlock_time=' /etc/pam.d/common-auth")
+        if out:
+            match = re.search(r'unlock_time\s*=\s*(\d+)', out)
+            if match:
+                unlock_value = int(match.group(1))
+    
+    if unlock_value is not None:
+        # CIS chấp nhận 0 (never) hoặc >= 900 (15 phút)
+        if unlock_value == 0 or unlock_value >= 900:
+            return "PASS", f"Password unlock time configured: {unlock_value} seconds"
+        else:
+            return "FAIL", f"Password unlock time is {unlock_value} seconds, should be 0 (never) or >=900 seconds (15 minutes)"
+    else:
+        # Giá trị mặc định là 600
+        return "MANUAL", "unlock_time not configured, default is 600 seconds. Check /etc/security/faillock.conf"
 
 def check_password_history():
     out = run_cmd("grep -i 'even_deny_root' /etc/security/faillock.conf 2>/dev/null")
@@ -438,26 +474,112 @@ def check_password_expiration():
     return "MANUAL", "Check /etc/login.defs for PASS_MAX_DAYS setting"
 
 def check_minimum_password_days():
-    out = run_cmd("grep -Pi -- '^\\h*PASS_MIN_DAYS\\h+' /etc/login.defs")
-    if out:
-        match = re.search(r'PASS_MIN_DAYS\s+(\d+)', out)
-        if match and int(match.group(1)) >= 1:
-            return "PASS", f"Minimum password days configured: {out.strip()}"
-        elif match:
-            return "FAIL", f"PASS_MIN_DAYS is {match.group(1)} (should be >=1)"
+    """CIS 5.4.1.2: Ensure minimum password days is configured (>=1)"""
+    min_days_value = None
     
-    return "MANUAL", "PASS_MIN_DAYS not configured in /etc/login.defs"
+    # Kiểm tra trong /etc/login.defs
+    if os.path.exists("/etc/login.defs"):
+        with open("/etc/login.defs", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('PASS_MIN_DAYS'):
+                    try:
+                        parts = line.split()
+                        if len(parts) > 1:
+                            min_days_value = int(parts[1])
+                            break
+                    except (ValueError, IndexError):
+                        continue
+    
+    # Kiểm tra từng user trong /etc/shadow (cột thứ 4)
+    user_issues = []
+    if os.path.exists("/etc/shadow"):
+        with open("/etc/shadow", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split(':')
+                if len(parts) < 4:
+                    continue
+                
+                username = parts[0]
+                min_days_str = parts[3]
+                
+                if min_days_str:
+                    try:
+                        user_min_days = int(min_days_str)
+                        if user_min_days < 1:
+                            user_issues.append(f"User '{username}' has PASS_MIN_DAYS={user_min_days}")
+                    except ValueError:
+                        continue
+    
+    if min_days_value is not None:
+        if min_days_value >= 1:
+            if user_issues:
+                return "FAIL", f"PASS_MIN_DAYS in /etc/login.defs is {min_days_value} (OK), but users with issues:\n" + "\n".join(user_issues[:5])
+            return "PASS", f"PASS_MIN_DAYS is {min_days_value} (should be >=1)"
+        else:
+            return "FAIL", f"PASS_MIN_DAYS is {min_days_value} (should be >=1)"
+    elif user_issues:
+        return "FAIL", "Users with PASS_MIN_DAYS < 1:\n" + "\n".join(user_issues[:5])
+    else:
+        return "MANUAL", "PASS_MIN_DAYS not configured and no users found with invalid minimum days"
 
 def check_password_warning_days():
-    out = run_cmd("grep -Pi -- '^\\h*PASS_WARN_AGE\\h+' /etc/login.defs")
-    if out:
-        match = re.search(r'PASS_WARN_AGE\s+(\d+)', out)
-        if match and int(match.group(1)) >= 7:
-            return "PASS", f"Password warning days configured: {out.strip()}"
-        elif match:
-            return "FAIL", f"PASS_WARN_AGE is {match.group(1)} (should be >=7)"
+    """CIS 5.4.1.3: Ensure password expiration warning days is configured (>=7)"""
+    warn_days_value = None
     
-    return "MANUAL", "PASS_WARN_AGE not configured in /etc/login.defs"
+    # Kiểm tra trong /etc/login.defs
+    if os.path.exists("/etc/login.defs"):
+        with open("/etc/login.defs", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('PASS_WARN_AGE'):
+                    try:
+                        parts = line.split()
+                        if len(parts) > 1:
+                            warn_days_value = int(parts[1])
+                            break
+                    except (ValueError, IndexError):
+                        continue
+    
+    # Kiểm tra từng user trong /etc/shadow (cột thứ 6)
+    user_issues = []
+    if os.path.exists("/etc/shadow"):
+        with open("/etc/shadow", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split(':')
+                if len(parts) < 6:
+                    continue
+                
+                username = parts[0]
+                warn_days_str = parts[5]
+                
+                if warn_days_str:
+                    try:
+                        user_warn_days = int(warn_days_str)
+                        if user_warn_days < 7:
+                            user_issues.append(f"User '{username}' has PASS_WARN_AGE={user_warn_days}")
+                    except ValueError:
+                        continue
+    
+    if warn_days_value is not None:
+        if warn_days_value >= 7:
+            if user_issues:
+                return "FAIL", f"PASS_WARN_AGE in /etc/login.defs is {warn_days_value} (OK), but users with issues:\n" + "\n".join(user_issues[:5])
+            return "PASS", f"PASS_WARN_AGE is {warn_days_value} (should be >=7)"
+        else:
+            return "FAIL", f"PASS_WARN_AGE is {warn_days_value} (should be >=7)"
+    elif user_issues:
+        return "FAIL", "Users with PASS_WARN_AGE < 7:\n" + "\n".join(user_issues[:5])
+    else:
+        return "MANUAL", "PASS_WARN_AGE not configured and no users found with invalid warning days"
 
 def check_password_hashing_algorithm():
     out = run_cmd("grep -i 'ENCRYPT_METHOD' /etc/login.defs 2>/dev/null")
@@ -466,10 +588,107 @@ def check_password_hashing_algorithm():
     return "MANUAL", "Check /etc/login.defs for ENCRYPT_METHOD setting"
 
 def check_inactive_password_lock():
+    """CIS 5.4.1.5: Ensure inactive password lock is configured (<=45 days)"""
+    inactive_value = None
+    
+    # Kiểm tra giá trị mặc định
     out = run_cmd("useradd -D | grep INACTIVE")
-    if "INACTIVE=30" in out or "INACTIVE=45" in out:
-        return "PASS", "Inactive password lock is configured"
-    return "MANUAL", "Check useradd defaults for INACTIVE setting"
+    if out:
+        match = re.search(r'INACTIVE=(\d+)', out)
+        if match:
+            inactive_value = int(match.group(1))
+    
+    # Kiểm tra từng user trong /etc/shadow (cột thứ 7)
+    user_issues = []
+    if os.path.exists("/etc/shadow"):
+        with open("/etc/shadow", 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split(':')
+                if len(parts) < 8:
+                    continue
+                
+                username = parts[0]
+                inactive_str = parts[6]
+                
+                if inactive_str:
+                    try:
+                        user_inactive = int(inactive_str)
+                        if user_inactive > 45:
+                            user_issues.append(f"User '{username}' has INACTIVE={user_inactive} days")
+                        elif user_inactive == -1:
+                            user_issues.append(f"User '{username}' has INACTIVE=-1 (disabled)")
+                    except ValueError:
+                        continue
+    
+    if inactive_value is not None:
+        if inactive_value <= 45 and inactive_value >= 0:
+            if user_issues:
+                return "FAIL", f"Default INACTIVE is {inactive_value} days (OK), but users with issues:\n" + "\n".join(user_issues[:5])
+            return "PASS", f"Default inactive lock is {inactive_value} days (should be <=45)"
+        elif inactive_value == -1:
+            return "FAIL", f"Default INACTIVE is -1 (disabled)"
+        else:
+            return "FAIL", f"Default inactive lock is {inactive_value} days (should be <=45)"
+    elif user_issues:
+        return "FAIL", "Users with inactive password lock issues:\n" + "\n".join(user_issues[:5])
+    else:
+        return "MANUAL", "INACTIVE not configured and no users found with invalid inactive days"
+
+def check_last_password_change():
+    """CIS 5.4.1.6: Ensure all users last password change date is in the past"""
+    try:
+        issues = []
+        
+        # Lấy số ngày hiện tại tính từ 1970-01-01
+        current_time = time.time()
+        current_days = int(current_time / 86400)  # 86400 giây = 1 ngày
+        
+        with open('/etc/shadow', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split(':')
+                if len(parts) < 3:
+                    continue
+                
+                username = parts[0]
+                password = parts[1]
+                last_change_str = parts[2]
+                
+                # Bỏ qua tài khoản không có mật khẩu
+                if password in ['', '*', '!', '!!']:
+                    continue
+                
+                # Bỏ qua nếu trường last_change trống
+                if not last_change_str:
+                    continue
+                
+                try:
+                    last_change_days = int(last_change_str)
+                    
+                    # Kiểm tra nếu ngày đổi mật khẩu trong tương lai
+                    if last_change_days > current_days:
+                        issues.append(f"User '{username}' has last password change in the future (day {last_change_days}, current: {current_days})")
+                except ValueError:
+                    continue
+        
+        if issues:
+            return "FAIL", "\n".join(issues[:10])
+        else:
+            return "PASS", "All users have last password change date in the past"
+            
+    except FileNotFoundError:
+        return "ERROR", "/etc/shadow file not found"
+    except PermissionError:
+        return "ERROR", "Permission denied when reading /etc/shadow"
+    except Exception as e:
+        return "ERROR", f"Error checking last password change: {str(e)}"
 
 def check_only_root_uid0():
     out = run_cmd("awk -F: '($3 == 0) { print $1 }' /etc/passwd")
@@ -821,18 +1040,18 @@ def check_home_dirs():
         return "MANUAL", "Home directory issues:\n" + "\n".join(issues[:5])
     return "PASS", "User home directories are properly configured"
 
-# --- Additional checks ---
+# --- Section 4.1.1 Firewall ---
 def check_ufw_status():
+    # Kiểm tra UFW có được cài đặt không
+    install_check = run_cmd("dpkg-query -W -f='${Status}' ufw 2>/dev/null | grep -o 'installed'")
+    if install_check != 'installed':
+        return "FAIL", "UFW is not installed"
+    
+    # Kiểm tra trạng thái UFW
     out = run_cmd("ufw status 2>/dev/null")
     if "Status: active" in out:
-        return "PASS", "UFW is active"
-    return "MANUAL", "UFW is not active or not installed"
-
-def check_ip_forwarding():
-    out = run_cmd("sysctl net.ipv4.ip_forward")
-    if "net.ipv4.ip_forward = 0" in out:
-        return "PASS", "IP forwarding is disabled"
-    return "FAIL", f"IP forwarding may be enabled:\n{out}"
+        return "PASS", "UFW is installed and active"
+    return "FAIL", "UFW is installed but not active"
 
 # ==================== MAIN EXECUTION ====================
 
@@ -877,7 +1096,6 @@ if __name__ == "__main__":
         ("5.1.1", "SSHD Config Permissions", "Ensure access to /etc/ssh/sshd_config is configured", "High", check_sshd_config, "chmod 600 /etc/ssh/sshd_config"),
         ("5.1.2", "SSH Private Key Permissions", "Ensure access to SSH private host key files is configured", "High", check_ssh_private_keys, "chmod 600 /etc/ssh/*key"),
         ("5.1.3", "SSH Public Key Permissions", "Ensure access to SSH public host key files is configured", "Medium", check_ssh_public_keys, "chmod 644 /etc/ssh/*.pub"),
-        ("5.2.10", "SSH Root Login", "Ensure SSH Root Login is disabled", "Critical", check_ssh_root_login, "Set 'PermitRootLogin no' in /etc/ssh/sshd_config"),
         
         # 5.3 PAM
         ("5.3.1.3", "PAM PWQuality", "Ensure latest version of libpam-pwquality is installed", "Medium", check_pam_pwquality, "apt install libpam-pwquality"),
@@ -885,8 +1103,8 @@ if __name__ == "__main__":
         ("5.3.2.2", "PAM Faillock Module", "Ensure pam_faillock module is enabled", "Medium", check_pam_faillock, "Enable pam_faillock in PAM configuration"),
         ("5.3.2.3", "PAM PWQuality Module", "Ensure pam_pwquality module is enabled", "Medium", check_pam_pwquality_enabled, "Enable pam_pwquality in /etc/pam.d/common-password"),
         ("5.3.2.4", "PAM PWHistory Module", "Ensure pam_pwhistory module is enabled", "Medium", check_pam_pwhistory_enabled, "Enable pam_pwhistory in /etc/pam.d/common-password"),
-        ("5.3.3.1.1", "Password Lockout", "Ensure password failed attempts lockout is configured", "High", check_password_lockout_configured, "Configure deny= in /etc/security/faillock.conf"),
-        ("5.3.3.1.2", "Password Unlock Time", "Ensure password unlock time is configured", "Medium", check_password_unlock_time, "Configure unlock_time= in /etc/security/faillock.conf"),
+        ("5.3.3.1.1", "Password Lockout", "Ensure password failed attempts lockout is configured", "High", check_password_lockout_configured, "Configure deny=1-5 in /etc/security/faillock.conf"),
+        ("5.3.3.1.2", "Password Unlock Time", "Ensure password unlock time is configured", "Medium", check_password_unlock_time, "Configure unlock_time=0 or >=900 in /etc/security/faillock.conf"),
         ("5.3.3.1.3", "Password Lockout Root", "Ensure password lockout includes root account", "High", check_password_history, "Add 'even_deny_root' to /etc/security/faillock.conf"),
         ("5.3.3.2.2", "Password Length", "Ensure minimum password length is configured", "Medium", check_password_length, "Set 'minlen = 14' in /etc/security/pwquality.conf"),
         ("5.3.3.3.1", "Password History", "Ensure password history remember is configured", "Medium", check_password_history_remember, "Set remember=24 in pam_pwhistory configuration"),
@@ -897,8 +1115,8 @@ if __name__ == "__main__":
         ("5.4.1.2", "Minimum Password Days", "Ensure minimum password days is configured", "Medium", check_minimum_password_days, "Set PASS_MIN_DAYS >=1 in /etc/login.defs"),
         ("5.4.1.3", "Password Warning Days", "Ensure password expiration warning days is configured", "Low", check_password_warning_days, "Set PASS_WARN_AGE >=7 in /etc/login.defs"),
         ("5.4.1.4", "Password Hashing", "Ensure strong password hashing algorithm is configured", "High", check_password_hashing_algorithm, "Set ENCRYPT_METHOD to SHA512 or YESCRYPT in /etc/login.defs"),
-        ("5.4.1.5", "Inactive Password Lock", "Ensure inactive password lock is configured", "Medium", check_inactive_password_lock, "Set INACTIVE in useradd defaults"),
-        ("5.4.1.6", "Last Password Change", "Ensure all users last password change date is in the past", "Low", lambda: ("MANUAL", "Check manually with 'chage -l <user>'"), "Check and correct password change dates"),
+        ("5.4.1.5", "Inactive Password Lock", "Ensure inactive password lock is configured", "Medium", check_inactive_password_lock, "Set INACTIVE <=45 days in useradd defaults"),
+        ("5.4.1.6", "Last Password Change", "Ensure all users last password change date is in the past", "Low", check_last_password_change, "Check and correct password change dates with 'chage -d' command"),
         
         ("5.4.2.1", "UID 0 Accounts", "Ensure root is the only UID 0 account", "Critical", check_only_root_uid0, "Remove or modify non-root accounts with UID 0"),
         ("5.4.2.2", "GID 0 Accounts", "Ensure root is the only GID 0 account", "High", check_only_root_gid0, "Change GID of non-root accounts with GID 0"),
@@ -908,9 +1126,9 @@ if __name__ == "__main__":
         ("5.4.2.8", "Accounts Without Shell Locked", "Ensure accounts without a valid login shell are locked", "Medium", check_accounts_without_shell_locked, "Lock accounts without valid shells: usermod -L <user>"),
         
         # 6.1 Logging
-        ("6.1.1.2", "Journald Log Access", "Ensure journald log file access is configured", "Low", check_journald_logs, "Set journal directory permissions to 750"),
-        ("6.1.2.4", "Rsyslog Permissions", "Ensure rsyslog log file creation mode is configured", "Low", check_rsyslog_perms, "Set $FileCreateMode 0640 in rsyslog.conf"),
-        ("6.1.3.1", "Log File Permissions", "Ensure access to all logfiles has been configured", "Low", check_log_files_perms, "Set log file permissions to 640 and owner to syslog:adm"),
+        ("6.1.1.2", "Journald Log Access", "Ensure journald log file access is configured", "Medium", check_journald_logs, "Set journal directory permissions to 750"),
+        ("6.1.2.4", "Rsyslog Permissions", "Ensure rsyslog log file creation mode is configured", "Medium", check_rsyslog_perms, "Set $FileCreateMode 0640 in rsyslog.conf"),
+        ("6.1.3.1", "Log File Permissions", "Ensure access to all logfiles has been configured", "Medium", check_log_files_perms, "Set log file permissions to 640 and owner to syslog:adm"),
         
         # 6.2 Audit
         ("6.2.4.1", "Audit Log Permissions", "Ensure audit log files mode is configured", "Medium", check_audit_log_perms, "Set audit log directory permissions to 750"),
@@ -941,9 +1159,8 @@ if __name__ == "__main__":
         ("7.2.9", "Home Directories", "Ensure local interactive user home directories are configured", "Medium", check_home_dirs, "Create and secure user home directories"),
         ("7.2.10", "User Dot Files", "Ensure local interactive user dot files access is configured", "Medium", lambda: ("MANUAL", "Check .bash_history, .netrc, .forward, .rhosts files"), "Secure dot files in user home directories"),
         
-        # Additional checks
-        ("4.5.1", "UFW Firewall", "Ensure Uncomplicated Firewall (UFW) is enabled", "High", check_ufw_status, "ufw enable"),
-        ("3.1.1", "IP Forwarding", "Ensure IP forwarding is disabled", "Medium", check_ip_forwarding, "sysctl -w net.ipv4.ip_forward=0"),
+        # 4.1 Firewall Configuration
+        ("4.1.1", "UFW Firewall", "Ensure Uncomplicated Firewall (UFW) is installed and enabled", "High", check_ufw_status, "apt install ufw && ufw enable"),
     ]
     
     for cis_id, title, description, severity, check_func, fix_cmd in checks:
